@@ -29,7 +29,7 @@ pipeline {
 
                     echo "----- MAVEN VERSION -----"
                     mvn -version
-
+                    sh 'mvn clean install'
                     echo "Running Maven Tests..."
                     mvn clean test
                 '''
