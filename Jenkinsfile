@@ -4,8 +4,8 @@ pipeline {
     environment {
         MAVEN_OPTS = "-Dmaven.test.failure.ignore=true"
         SEVERITY_THRESHOLD = "HIGH"
-        DEPLOY_SERVER = "ubuntu@<EC2-PUBLIC-IP>"
-        DEPLOY_PATH = "/opt/app"
+        DEPLOY_SERVER = "ubuntu@44.193.0.46"
+        DEPLOY_PATH = "/var/www/myapp"
     }
 
     stages {
