@@ -1,110 +1,87 @@
+// Jenkinsfile (Declarative Pipeline)
+
 pipeline {
-    agent { label 'agent' }   // your Jenkins build agent label
+    agent {label 'agent'}
 
-    tools {
-        jdk 'jdk21'          // Must match Jenkins -> Global Tool Configuration
-        maven 'maven3911'        // Must match Jenkins -> Global Tool Configuration
-    }
-
-    environment {
-        PATH = "/snap/bin:${env.PATH}"     // Required for Trivy installed via snap
-        APP_SERVER = "ubuntu@44.193.0.46"   // Replace with your Deployment EC2
-        APP_PATH   = "/var/www/myapp"      // Folder where your app runs
-    }
-
+  
     stages {
-
-        /* -------------------------------------------------------------
-         * CHECKOUT CODE
-         * ------------------------------------------------------------- */
-        stage('Checkout') {
+        stage('Checkout Code') {
+            
             steps {
+                // The Multibranch pipeline automatically checks out the correct branch
                 checkout scm
             }
         }
 
-        /* -------------------------------------------------------------
-         * BUILD & TEST
-         * ------------------------------------------------------------- */
-        stage('Build & Test') {
+        stage('Build & Test using Maven') {
+            
             steps {
-                sh 'mvn -B -DskipTests clean package'
-                sh 'mvn clean install'
+                // Assumes Maven is installed and accessible in the agent's PATH
+                sh 'mvn clean test'
             }
         }
 
-        /* -------------------------------------------------------------
-         * SECURITY SCAN USING TRIVY
-         * FAIL IF HIGH OR CRITICAL VULNERABILITIES FOUND
-         * ------------------------------------------------------------- */
-        stage('Security Scan - Trivy') {
+        stage('Security Scan Stage') {
+         
             steps {
-                sh '''
-                echo "Running Trivy filesystem security scan..."
-                trivy fs . --format json --output trivy-report.json
-
-                # Count HIGH and CRITICAL vulns
-                HIGH=$(trivy fs . --severity HIGH --exit-code 0 | grep -c HIGH || true)
-                CRITICAL=$(trivy fs . --severity CRITICAL --exit-code 0 | grep -c CRITICAL || true)
-
-                echo "HIGH vulnerabilities found: $HIGH"
-                echo "CRITICAL vulnerabilities found: $CRITICAL"
-
-                # Fail pipeline if any HIGH or CRITICAL exist
-                if [ "$HIGH" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
-                    echo "❌ Security scan failed: High/Critical vulnerabilities detected!"
-                    exit 1
-                fi
-
-                echo "✔ Security Scan Passed"
-                '''
-            }
-
-            post {
-                always {
-                    echo "Archiving Trivy report..."
-                    archiveArtifacts artifacts: 'trivy-report.json', fingerprint: true
-                }
+                // Example using OWASP Dependency Check
+                // You must install the OWASP Dependency-Check plugin in Jenkins
+                dependencyCheck analysis: [
+                    // Configure your project settings here
+                    // e.g., suppressionFile: 'suppressions.xml'
+                ],
+                // Add the failure threshold configuration
+                failBuildOnCVSS: 7, // Fail if any vulnerability has a CVSS score >= 7.0
+                skipOnScmChange: false,
+                severity: 'HIGH', // Only report HIGH severity
+                format: 'HTML',
+                outputDirectory: 'dependency-check-report'
             }
         }
 
-        /* -------------------------------------------------------------
-         * PACKAGE ARTIFACT
-         * ------------------------------------------------------------- */
-        stage('Package') {
+        stage('Package Stage') {
+         
             steps {
-                sh 'mvn clean package -DskipTests'
-            }
-
-            post {
-                success {
-                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
-                }
+                sh 'mvn package -DskipTests' // Build the artifact
+                // Archive the resulting .jar or .war file (adjust path as needed)
+                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
             }
         }
 
-        /* -------------------------------------------------------------
-         * DEPLOY TO APP SERVER (ONLY MAIN BRANCH)
-         * ------------------------------------------------------------- */
-        stage('Deploy to App Server') {
+        stage('Deploy to Application Server') {
+            // The deployment should only happen for the 'main' branch
             when {
-                branch 'main'    // Deploy only for main branch
+                branch 'main'
+            }
+          
+            environment {
+                // Environment variables for the deployment script
+                APP_SERVER_IP = 'Your_Application_Server_IP' // Replace with your App Server IP
+                SSH_CREDENTIAL_ID = 'appserver-ssh-key' // Your SSH credential ID from Step 3
+                TARGET_USER = 'ec2-user' // The username for the app server
+                TARGET_PATH = '/opt/app' // Where the app will be deployed
+                ARTIFACT_NAME = 'target/your-app-name.jar' // REPLACE with your actual artifact name
             }
             steps {
-                sh '''
-                echo "Deploying application to the App Server..."
+                withCredentials([sshUserPrivateKey(
+                    credentialsId: env.SSH_CREDENTIAL_ID,
+                    keyFileVariable: 'SSH_KEY',
+                    usernameVariable: 'SSH_USER'
+                )]) {
+                    // 1. Copy artifact to the Application Server using SCP
+                    sh "scp -i ${SSH_KEY} ${ARTIFACT_NAME} ${TARGET_USER}@${env.APP_SERVER_IP}:${env.TARGET_PATH}/"
 
-                # Copy JAR file to application server
-                scp -o StrictHostKeyChecking=no target/*.jar ${APP_SERVER}:${APP_PATH}/app.jar
-
-                # Stop running app (if any) and start new version
-                ssh -o StrictHostKeyChecking=no ${APP_SERVER} "
-                    pkill -f app.jar || true
-                    nohup java -jar ${APP_PATH}/app.jar > ${APP_PATH}/app.log 2>&1 &
-                "
-
-                echo "✔ Deployment Completed Successfully"
-                '''
+                    // 2. Restart the application on the Application Server using SSH
+                    sh '''
+                        ssh -i ${SSH_KEY} ${TARGET_USER}@${env.APP_SERVER_IP} "
+                            # Stop the existing application process (adjust command as needed)
+                            sudo systemctl stop my-app-service.service || true
+                            
+                            # Start the new application
+                            java -jar ${TARGET_PATH}/${ARTIFACT_NAME} &
+                        "
+                    '''
+                }
             }
         }
     }
