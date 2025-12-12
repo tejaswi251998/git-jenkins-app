@@ -1,6 +1,6 @@
 pipeline {
 
-    agent { label 'maven-agent' }   // your Jenkins agent label
+    agent { label 'agent' }   // your Jenkins agent label
 
     tools {
         jdk 'jdk21'                 // configure this in Jenkins Tools
