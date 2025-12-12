@@ -1,48 +1,110 @@
 pipeline {
-    agent { label 'agent' }
+    agent { label 'agent' }   // your Jenkins build agent label
 
     tools {
-        jdk 'jdk21'          // Jenkins Tool → Manage Jenkins > Tools
-        maven 'maven3911'        // Jenkins Tool → Manage Jenkins > Tools
+        jdk 'Java17'          // Must match Jenkins -> Global Tool Configuration
+        maven 'Maven3'        // Must match Jenkins -> Global Tool Configuration
     }
 
     environment {
-        APP_SERVER = "ubuntu@44.193.0.46"
-        APP_PATH = "/var/www/myapp"
+        PATH = "/snap/bin:${env.PATH}"     // Required for Trivy installed via snap
+        APP_SERVER = "ubuntu@44.193.0.46"   // Replace with your Deployment EC2
+        APP_PATH   = "/var/www/myapp"      // Folder where your app runs
     }
 
     stages {
 
+        /* -------------------------------------------------------------
+         * CHECKOUT CODE
+         * ------------------------------------------------------------- */
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
 
-        stage('Build') {
+        /* -------------------------------------------------------------
+         * BUILD & TEST
+         * ------------------------------------------------------------- */
+        stage('Build & Test') {
             steps {
-                sh 'mvn clean package -DskipTests'
+                sh 'mvn clean test -DskipTests=false'
             }
         }
 
+        /* -------------------------------------------------------------
+         * SECURITY SCAN USING TRIVY
+         * FAIL IF HIGH OR CRITICAL VULNERABILITIES FOUND
+         * ------------------------------------------------------------- */
         stage('Security Scan - Trivy') {
             steps {
                 sh '''
-                echo "Running Trivy Scan..."
-                trivy fs --exit-code 0 --format table --output trivy-report.txt .
+                echo "Running Trivy filesystem security scan..."
+                trivy fs . --format json --output trivy-report.json
+
+                # Count HIGH and CRITICAL vulns
+                HIGH=$(trivy fs . --severity HIGH --exit-code 0 | grep -c HIGH || true)
+                CRITICAL=$(trivy fs . --severity CRITICAL --exit-code 0 | grep -c CRITICAL || true)
+
+                echo "HIGH vulnerabilities found: $HIGH"
+                echo "CRITICAL vulnerabilities found: $CRITICAL"
+
+                # Fail pipeline if any HIGH or CRITICAL exist
+                if [ "$HIGH" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
+                    echo "❌ Security scan failed: High/Critical vulnerabilities detected!"
+                    exit 1
+                fi
+
+                echo "✔ Security Scan Passed"
                 '''
             }
+
             post {
                 always {
-                    archiveArtifacts artifacts: 'trivy-report.txt', fingerprint: true
+                    echo "Archiving Trivy report..."
+                    archiveArtifacts artifacts: 'trivy-report.json', fingerprint: true
                 }
             }
         }
 
+        /* -------------------------------------------------------------
+         * PACKAGE ARTIFACT
+         * ------------------------------------------------------------- */
+        stage('Package') {
+            steps {
+                sh 'mvn clean package -DskipTests'
+            }
+
+            post {
+                success {
+                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                }
+            }
+        }
+
+        /* -------------------------------------------------------------
+         * DEPLOY TO APP SERVER (ONLY MAIN BRANCH)
+         * ------------------------------------------------------------- */
         stage('Deploy to App Server') {
+            when {
+                branch 'main'    // Deploy only for main branch
+            }
             steps {
                 sh '''
-                echo "Deploying build artifact to Ubuntu EC2..."
+                echo "Deploying application to the App Server..."
 
-                # Copy JAR
-                scp -o StrictHostKeyChecking=no target/*.j*
+                # Copy JAR file to application server
+                scp -o StrictHostKeyChecking=no target/*.jar ${APP_SERVER}:${APP_PATH}/app.jar
+
+                # Stop running app (if any) and start new version
+                ssh -o StrictHostKeyChecking=no ${APP_SERVER} "
+                    pkill -f app.jar || true
+                    nohup java -jar ${APP_PATH}/app.jar > ${APP_PATH}/app.log 2>&1 &
+                "
+
+                echo "✔ Deployment Completed Successfully"
+                '''
+            }
+        }
+    }
+}
