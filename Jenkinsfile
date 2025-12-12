@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+      agent { label 'agent' }
 
     environment {
         // Update these according to your environment
