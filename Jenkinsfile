@@ -2,8 +2,8 @@ pipeline {
     agent { label 'agent' }   // your Jenkins build agent label
 
     tools {
-        jdk 'Java17'          // Must match Jenkins -> Global Tool Configuration
-        maven 'Maven3'        // Must match Jenkins -> Global Tool Configuration
+        jdk 'jdk21'          // Must match Jenkins -> Global Tool Configuration
+        maven 'maven3911'        // Must match Jenkins -> Global Tool Configuration
     }
 
     environment {
