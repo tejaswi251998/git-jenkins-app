@@ -28,7 +28,7 @@ pipeline {
          * ------------------------------------------------------------- */
         stage('Build & Test') {
             steps {
-                sh 'mvn clean test -DskipTests=false'
+                sh 'mvn clean test'
             }
         }
 
