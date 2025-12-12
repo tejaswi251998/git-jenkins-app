@@ -30,30 +30,43 @@ pipeline {
         /*-----------------------------------
          3. SECURITY SCAN (OWASP Dependency Check)
         -----------------------------------*/
-        stage('Security Scan') {
-            steps {
-                sh '''
-                    echo "Downloading OWASP Dependency Check..."
+        stage('Security Scan - OWASP Dependency Check') {
+    steps {
+        sh '''
+            echo "Installing unzip if missing..."
+            if ! command -v unzip >/dev/null ; then
+                sudo yum install unzip -y || sudo apt-get install unzip -y
+            fi
 
-                    wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip -O dc.zip
-                    
-                    unzip dc.zip -d dependency-check
+            echo "Downloading Dependency Check..."
+            wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip -O dc.zip
 
-                    echo "Running Security Scan..."
-                    dependency-check/bin/dependency-check.sh \
-                        --project git-jenkins-app \
-                        --scan . \
-                        --format HTML \
-                        --out dependency-report
-                '''
-            }
-            post {
-                always {
-                    echo "Archiving Security Reports..."
-                    archiveArtifacts artifacts: 'dependency-report/*', allowEmptyArchive: true
-                }
-            }
+            echo "Extracting Dependency Check..."
+            rm -rf dependency-check*
+            unzip -q dc.zip
+
+            # Rename extracted folder to a known name
+            EXTRACTED=$(ls -d dependency-check-*)
+            mv "$EXTRACTED" dependency-check
+
+            echo "Giving execute permission..."
+            chmod +x dependency-check/bin/dependency-check.sh
+
+            echo "Running Dependency Check..."
+            ${WORKSPACE}/dependency-check/bin/dependency-check.sh \
+                --project git-jenkins-app \
+                --scan ${WORKSPACE} \
+                --format HTML \
+                --out ${WORKSPACE}/dependency-report || true
+        '''
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'dependency-report/*', allowEmptyArchive: true
         }
+    }
+}
+
 
         /*-----------------------------------
          4. PACKAGE JAR
