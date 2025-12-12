@@ -22,22 +22,20 @@ pipeline {
         }
 
         stage('Security Scan Stage') {
-         
+    
             steps {
-                // Example using OWASP Dependency Check
-                // You must install the OWASP Dependency-Check plugin in Jenkins
+                // The most common and correct Declarative syntax for the Dependency-Check plugin:
                 dependencyCheck analysis: [
-                    // Configure your project settings here
-                    // e.g., suppressionFile: 'suppressions.xml'
+                    // No need to specify outputDirectory or format if using the simple form
                 ],
-                // Add the failure threshold configuration
-                failBuildOnCVSS: 7, // Fail if any vulnerability has a CVSS score >= 7.0
-                skipOnScmChange: false,
-                severity: 'HIGH', // Only report HIGH severity
-                format: 'HTML',
-                outputDirectory: 'dependency-check-report'
+                // The parameter is usually 'failOnCVSS' (lowercase 'o'), not 'failBuildOnCVSS'
+                failOnCVSS: 7.0
+                
+                // Remove 'severity', 'format', and 'outputDirectory' from the list
+                // and configure them in the *Job Configuration* or rely on defaults.
+                // For a declarative pipeline, keeping it simple is best.
             }
-        }
+}
 
         stage('Package Stage') {
          
