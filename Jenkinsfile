@@ -1,53 +1,55 @@
+pipeline {
 
-  pipeline {
-    agent { label 'agent' }
+    agent { label 'maven-agent' }   // your Jenkins agent label
 
-    environment {
-        DEPLOY_SERVER = "10.0.1.156"   // Replace with app server EC2
-        DEPLOY_PATH   = "/var/www/myapp"              // Folder on app-server
-        SSH_CRED      = "app-server-ssh"              // Jenkins SSH Credential ID
-        JAVA_HOME     = "/usr/lib/jvm/java-21"        // Your EC2 agent uses Java 21
+    tools {
+        jdk 'jdk21'                 // configure this in Jenkins Tools
+        maven 'maven3911'              // configure this in Jenkins Tools
     }
 
     stages {
 
-        /* ---------------------------------------------------
-         * 1. CHECKOUT CODE
-         * ---------------------------------------------------*/
-        stage('Checkout') {
+        /*-----------------------------------
+         1. CHECKOUT SOURCE CODE
+        -----------------------------------*/
+        stage('Checkout Code') {
             steps {
                 checkout scm
-                echo "Checked out branch: ${env.BRANCH_NAME}"
             }
         }
 
-        /* ---------------------------------------------------
-         * 2. BUILD & TEST WITH MAVEN (Java 21)
-         * ---------------------------------------------------*/
+        /*-----------------------------------
+         2. BUILD AND TEST
+        -----------------------------------*/
         stage('Build & Test') {
             steps {
                 sh '''
-                    echo "Using Java version:"
+                    echo "----- JAVA VERSION -----"
                     java -version
 
+                    echo "----- MAVEN VERSION -----"
+                    mvn -version
+
+                    echo "Running Maven Tests..."
                     mvn clean test
                 '''
             }
         }
 
-        /* ---------------------------------------------------
-         * 3. SECURITY SCAN USING OWASP DEPENDENCY CHECK
-         * ---------------------------------------------------*/
-        stage('Security Scan - OWASP') {
+        /*-----------------------------------
+         3. SECURITY SCAN (OWASP Dependency Check)
+        -----------------------------------*/
+        stage('Security Scan') {
             steps {
                 sh '''
                     echo "Downloading OWASP Dependency Check..."
+
                     wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip -O dc.zip
+                    
+                    unzip dc.zip -d dependency-check
 
-                    unzip -o dc.zip -d dc
-
-                    echo "Running Dependency Check scan..."
-                    dc/dependency-check/bin/dependency-check.sh \
+                    echo "Running Security Scan..."
+                    dependency-check/bin/dependency-check.sh \
                         --project git-jenkins-app \
                         --scan . \
                         --format HTML \
@@ -56,57 +58,51 @@
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'dependency-report/*'
-                }
-
-                failure {
-                    echo "Security Scan Failed — Fix vulnerabilities!"
+                    echo "Archiving Security Reports..."
+                    archiveArtifacts artifacts: 'dependency-report/*', allowEmptyArchive: true
                 }
             }
         }
 
-        /* ---------------------------------------------------
-         * 4. PACKAGE ARTIFACT (MAVEN)
-         * ---------------------------------------------------*/
+        /*-----------------------------------
+         4. PACKAGE JAR
+        -----------------------------------*/
         stage('Package') {
             steps {
-                sh 'mvn -B -DskipTests clean package'
-
-                archiveArtifacts artifacts: '**/target/*.jar', fingerprint: true
+                sh '''
+                    echo "Packaging Application..."
+                    mvn -B -DskipTests clean package
+                '''
+            }
+            post {
+                success {
+                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                }
             }
         }
 
-        /* ---------------------------------------------------
-         * 5. DEPLOY TO APP SERVER ONLY ON MAIN BRANCH
-         * ---------------------------------------------------*/
-        stage('Deploy to App Server EC2') {
+        /*-----------------------------------
+         5. DEPLOY ONLY IF BRANCH = main
+        -----------------------------------*/
+        stage('Deploy to App Server') {
             when {
                 branch 'main'
             }
             steps {
-                echo "Deploying to EC2 Instance: ${DEPLOY_SERVER}"
+                echo "Skipping deploy for non-main branch..."
+                echo "Deploying to application server..."
 
-                sshagent(credentials: [SSH_CRED]) {
+                sshagent(['app-server-ssh']) {
                     sh '''
-                        echo "Transferring JAR to App Server..."
-                        scp -o StrictHostKeyChecking=no target/*.jar ec2-user@'${DEPLOY_SERVER}':'${DEPLOY_PATH}/app.jar'
+                        echo "Copying Artifact to Server..."
 
-                        echo "Restarting Application Service..."
-                        ssh -o StrictHostKeyChecking=no ec2-user@'${DEPLOY_SERVER}' '
-                            sudo systemctl stop myapp || true
-                            sudo systemctl start myapp
-                        '
+                        scp -o StrictHostKeyChecking=no target/*.jar ec2-user@54.xx.xx.xx:/home/ec2-user/app.jar
 
-                        echo "Deployment Successful!"
+                        echo "Restarting Application..."
+                        ssh -o StrictHostKeyChecking=no ec2-user@54.xx.xx.xx "nohup java -jar /home/ec2-user/app.jar > app.log 2>&1 &"
                     '''
                 }
             }
-        }
-    }
-
-    post {
-        always {
-            echo "Pipeline completed for branch: ${env.BRANCH_NAME}"
         }
     }
 }
