@@ -1,79 +1,103 @@
-pipeline {
-      agent { label 'agent' }
+
+  pipeline {
+    agent { label 'agent' }
 
     environment {
-        // Update these according to your environment
-        DEPLOY_SERVER = "10.0.1.156"            // PRIVATE IP of your App EC2
-        DEPLOY_PATH   = "/var/www/myapp"          // Directory on App EC2
-        SSH_CRED      = "app-server-ssh"          // Jenkins → Manage Credentials → SSH Username with private key
-    }
-
-    triggers {
-        // Enables GitHub Webhook for MultiBranch pipeline
-        githubPush()
+        DEPLOY_SERVER = "10.0.1.156"   // Replace with app server EC2
+        DEPLOY_PATH   = "/var/www/myapp"              // Folder on app-server
+        SSH_CRED      = "app-server-ssh"              // Jenkins SSH Credential ID
+        JAVA_HOME     = "/usr/lib/jvm/java-21"        // Your EC2 agent uses Java 21
     }
 
     stages {
 
-        stage('Checkout Code') {
+        /* ---------------------------------------------------
+         * 1. CHECKOUT CODE
+         * ---------------------------------------------------*/
+        stage('Checkout') {
             steps {
                 checkout scm
+                echo "Checked out branch: ${env.BRANCH_NAME}"
             }
         }
 
-        stage('Build & Test (Maven)') {
-            steps {
-                sh 'mvn clean test'
-            }
-        }
-
-        stage('Security Scan - OWASP Dependency Check') {
+        /* ---------------------------------------------------
+         * 2. BUILD & TEST WITH MAVEN (Java 21)
+         * ---------------------------------------------------*/
+        stage('Build & Test') {
             steps {
                 sh '''
-                    dependency-check.sh \
-                    --scan . \
-                    --format HTML \
-                    --project git-jenkins-app \
-                    --out dependency-check-report
+                    echo "Using Java version:"
+                    java -version
+
+                    mvn clean test
+                '''
+            }
+        }
+
+        /* ---------------------------------------------------
+         * 3. SECURITY SCAN USING OWASP DEPENDENCY CHECK
+         * ---------------------------------------------------*/
+        stage('Security Scan - OWASP') {
+            steps {
+                sh '''
+                    echo "Downloading OWASP Dependency Check..."
+                    wget https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip -O dc.zip
+
+                    unzip -o dc.zip -d dc
+
+                    echo "Running Dependency Check scan..."
+                    dc/dependency-check/bin/dependency-check.sh \
+                        --project git-jenkins-app \
+                        --scan . \
+                        --format HTML \
+                        --out dependency-report
                 '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'dependency-check-report/*', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'dependency-report/*'
                 }
 
                 failure {
-                    echo "Security scan failed!"
+                    echo "Security Scan Failed — Fix vulnerabilities!"
                 }
             }
         }
 
-        stage('Package Application') {
+        /* ---------------------------------------------------
+         * 4. PACKAGE ARTIFACT (MAVEN)
+         * ---------------------------------------------------*/
+        stage('Package') {
             steps {
-                sh 'mvn clean package -DskipTests'
+                sh 'mvn -B -DskipTests clean package'
+
+                archiveArtifacts artifacts: '**/target/*.jar', fingerprint: true
             }
         }
 
-        stage('Archive Artifact') {
-            steps {
-                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
-            }
-        }
-
-        stage('Deploy to Application Server (main branch only)') {
+        /* ---------------------------------------------------
+         * 5. DEPLOY TO APP SERVER ONLY ON MAIN BRANCH
+         * ---------------------------------------------------*/
+        stage('Deploy to App Server EC2') {
             when {
                 branch 'main'
             }
             steps {
+                echo "Deploying to EC2 Instance: ${DEPLOY_SERVER}"
 
-                echo "Deploying to application server..."
-
-                // Copy artifact to App Server
-                sshagent([SSH_CRED]) {
+                sshagent(credentials: [SSH_CRED]) {
                     sh '''
-                        scp target/*.jar ec2-user@${DEPLOY_SERVER}:${DEPLOY_PATH}/app.jar
+                        echo "Transferring JAR to App Server..."
+                        scp -o StrictHostKeyChecking=no target/*.jar ec2-user@'${DEPLOY_SERVER}':'${DEPLOY_PATH}/app.jar'
 
-                        ssh ec2-user@${DEPLOY_SERVER} "sudo systemctl restart myapp.service"
+                        echo "Restarting Application Service..."
+                        ssh -o StrictHostKeyChecking=no ec2-user@'${DEPLOY_SERVER}' '
+                            sudo systemctl stop myapp || true
+                            sudo systemctl start myapp
+                        '
+
+                        echo "Deployment Successful!"
                     '''
                 }
             }
@@ -82,7 +106,8 @@ pipeline {
 
     post {
         always {
-            echo "Pipeline completed!"
+            echo "Pipeline completed for branch: ${env.BRANCH_NAME}"
         }
     }
 }
+
