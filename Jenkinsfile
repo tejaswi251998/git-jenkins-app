@@ -23,16 +23,7 @@ pipeline {
         -----------------------------------*/
         stage('Build & Test') {
             steps {
-                sh '''
-                    echo "----- JAVA VERSION -----"
-                    java -version
-
-                    echo "----- MAVEN VERSION -----"
-                    mvn -version
-                    sh 'mvn clean install'
-                    echo "Running Maven Tests..."
-                    mvn clean test
-                '''
+                sh 'mvn clean test'
             }
         }
 
