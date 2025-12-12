@@ -54,22 +54,25 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                sh '''
-                    echo "Deploying artifact to EC2..."
-
-                    ssh -o StrictHostKeyChecking=no ${DEPLOY_SERVER} "mkdir -p ${DEPLOY_PATH}"
-
-                    scp -o StrictHostKeyChecking=no target/*.jar ${DEPLOY_SERVER}:${DEPLOY_PATH}/app.jar
-
-                    ssh -o StrictHostKeyChecking=no ${DEPLOY_SERVER} "
-                        pkill -f app.jar || true
-                        nohup java -jar ${DEPLOY_PATH}/app.jar > ${DEPLOY_PATH}/app.log 2>&1 &
-                    "
-
-                    echo "Deployment Completed Successfully!"
-                '''
+                sshagent(['app-server-ssh']) {
+                    sh '''
+                        echo "Deploying artifact to EC2..."
+        
+                        ssh -o StrictHostKeyChecking=no ubuntu@44.193.0.46 "mkdir -p /var/www/myapp"
+        
+                        scp -o StrictHostKeyChecking=no target/*.jar ubuntu@44.193.0.46:/var/www/myapp/app.jar
+        
+                        ssh -o StrictHostKeyChecking=no ubuntu@44.193.0.46 "
+                            pkill -f app.jar || true
+                            nohup java -jar /var/www/myapp/app.jar > /var/www/myapp/app.log 2>&1 &
+                        "
+        
+                        echo "Deployment Completed Successfully!"
+                    '''
+                }
             }
-        }
+}
+
     }
 
     post {
