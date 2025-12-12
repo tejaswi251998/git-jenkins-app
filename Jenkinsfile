@@ -1,113 +1,48 @@
 pipeline {
-
-    agent { label 'agent' }   // your Jenkins agent label
+    agent { label 'agent' }
 
     tools {
-        jdk 'jdk21'                 // configure this in Jenkins Tools
-        maven 'maven3911'              // configure this in Jenkins Tools
+        jdk 'jdk21'          // Jenkins Tool → Manage Jenkins > Tools
+        maven 'maven3911'        // Jenkins Tool → Manage Jenkins > Tools
+    }
+
+    environment {
+        APP_SERVER = "ubuntu@44.193.0.46"
+        APP_PATH = "/var/www/myapp"
     }
 
     stages {
 
-        /*-----------------------------------
-         1. CHECKOUT SOURCE CODE
-        -----------------------------------*/
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
                 checkout scm
             }
         }
 
-        /*-----------------------------------
-         2. BUILD AND TEST
-        -----------------------------------*/
-        stage('Build & Test') {
+        stage('Build') {
             steps {
-                sh 'mvn clean test'
+                sh 'mvn clean package -DskipTests'
             }
         }
 
-        /*-----------------------------------
-         3. SECURITY SCAN (OWASP Dependency Check)
-        -----------------------------------*/
-        stage('Security Scan - OWASP Dependency Check') {
-    steps {
-        sh '''
-            echo "Installing unzip if missing..."
-            if ! command -v unzip >/dev/null ; then
-                sudo yum install unzip -y || sudo apt-get install unzip -y
-            fi
-
-            echo "Downloading Dependency Check..."
-            wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v10.0.2/dependency-check-10.0.2-release.zip -O dc.zip
-
-            echo "Extracting Dependency Check..."
-            rm -rf dependency-check*
-            unzip -q dc.zip
-
-            # Rename extracted folder to a known name
-            EXTRACTED=$(ls -d dependency-check-*)
-            mv "$EXTRACTED" dependency-check
-
-            echo "Giving execute permission..."
-            chmod +x dependency-check/bin/dependency-check.sh
-
-            echo "Running Dependency Check..."
-            ${WORKSPACE}/dependency-check/bin/dependency-check.sh \
-                --project git-jenkins-app \
-                --scan ${WORKSPACE} \
-                --format HTML \
-                --out ${WORKSPACE}/dependency-report || true
-        '''
-    }
-    post {
-        always {
-            archiveArtifacts artifacts: 'dependency-report/*', allowEmptyArchive: true
-        }
-    }
-}
-
-
-        /*-----------------------------------
-         4. PACKAGE JAR
-        -----------------------------------*/
-        stage('Package') {
+        stage('Security Scan - Trivy') {
             steps {
                 sh '''
-                    echo "Packaging Application..."
-                    mvn -B -DskipTests clean package
+                echo "Running Trivy Scan..."
+                trivy fs --exit-code 0 --format table --output trivy-report.txt .
                 '''
             }
             post {
-                success {
-                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                always {
+                    archiveArtifacts artifacts: 'trivy-report.txt', fingerprint: true
                 }
             }
         }
 
-        /*-----------------------------------
-         5. DEPLOY ONLY IF BRANCH = main
-        -----------------------------------*/
         stage('Deploy to App Server') {
-            when {
-                branch 'main'
-            }
             steps {
-                echo "Skipping deploy for non-main branch..."
-                echo "Deploying to application server..."
+                sh '''
+                echo "Deploying build artifact to Ubuntu EC2..."
 
-                sshagent(['app-server-ssh']) {
-                    sh '''
-                        echo "Copying Artifact to Server..."
-
-                        scp -o StrictHostKeyChecking=no target/*.jar ec2-user@54.xx.xx.xx:/home/ec2-user/app.jar
-
-                        echo "Restarting Application..."
-                        ssh -o StrictHostKeyChecking=no ec2-user@54.xx.xx.xx "nohup java -jar /home/ec2-user/app.jar > app.log 2>&1 &"
-                    '''
-                }
-            }
-        }
-    }
-}
-
+                # Copy JAR
+                scp -o StrictHostKeyChecking=no target/*.j*
