@@ -51,7 +51,13 @@ pipeline {
                 }
             }
         }
-
+        stage('Package') {
+            steps {
+                sh 'mvn package -DskipTests'
+                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+            }
+        }
+        
         stage('Deploy to EC2') {
             steps {
                 sshagent(['app-server']) {
