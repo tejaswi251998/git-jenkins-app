@@ -2,10 +2,10 @@ pipeline {
     agent { label 'agent' }
 
     environment {
-        MAVEN_OPTS = "-Dmaven.test.failure.ignore=true"
-        SEVERITY_THRESHOLD = "HIGH"
+        TOMCAT_HOME = "/opt/tomcat10"
         DEPLOY_SERVER = "ubuntu@44.193.0.46"
-        DEPLOY_PATH = "/var/www/myapp"
+        APP_NAME = "myapp"
+        SEVERITY_THRESHOLD = "HIGH"
     }
 
     stages {
@@ -16,10 +16,11 @@ pipeline {
             }
         }
 
-        stage('Build') {
+        stage('Build & Test') {
             steps {
-                echo "Running: mvn clean test"
-                sh 'mvn clean test -Dcheckstyle.skip=true -Dnohttp.skip=true'
+                sh '''
+                    mvn clean test
+                '''
             }
             post {
                 always {
@@ -28,19 +29,24 @@ pipeline {
             }
         }
 
-        
+        stage('Package WAR') {
+            steps {
+                sh '''
+                    mvn clean package -DskipTests
+                    ls -lh target/*.war
+                '''
+            }
+        }
 
         stage('Security Scan - Trivy') {
             steps {
                 sh '''
-                    echo "Running Trivy vulnerability scan..."
                     trivy fs --exit-code 0 --format json --output trivy-report.json .
 
-                    HIGH_COUNT=$(trivy fs --severity HIGH --exit-code 0 --format table . | grep -c HIGH || true)
-                    echo "High Severity Vulnerabilities Found: $HIGH_COUNT"
+                    HIGH_COUNT=$(trivy fs --severity HIGH --exit-code 0 . | grep -c HIGH || true)
 
                     if [ "$HIGH_COUNT" -gt 0 ]; then
-                        echo "❌ Build failed – HIGH vulnerabilities found."
+                        echo "❌ HIGH vulnerabilities found"
                         exit 1
                     fi
                 '''
@@ -51,45 +57,42 @@ pipeline {
                 }
             }
         }
-        stage('Package') {
+
+        stage('Deploy to Tomcat App Server') {
             steps {
-                sh 'mvn package -DskipTests'
-                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
-            }
-        }
-        
-        stage('Deploy to EC2') {
-            steps {
-                sshagent(['app-server']) {
+                sshagent(['app-server-ssh']) {
                     sh '''
-                        echo "Deploying artifact to EC2..."
-        
-                        ssh -o StrictHostKeyChecking=no ubuntu@44.193.0.46 "mkdir -p /var/www/myapp"
-        
-                        scp -o StrictHostKeyChecking=no target/*.jar ubuntu@44.193.0.46:/var/www/myapp/app.jar
-        
-                        ssh -o StrictHostKeyChecking=no ubuntu@44.193.0.46 "
-                            pkill -f app.jar || true
-                            nohup java -jar /var/www/myapp/app.jar > /var/www/myapp/app.log 2>&1 &
-                        "
-        
-                        echo "Deployment Completed Successfully!"
+                        WAR_FILE=$(ls target/*.war)
+
+                        echo "Deploying $WAR_FILE to Tomcat..."
+
+                        ssh -o StrictHostKeyChecking=no $DEPLOY_SERVER << EOF
+                            rm -rf $TOMCAT_HOME/webapps/$APP_NAME
+                            rm -f  $TOMCAT_HOME/webapps/$APP_NAME.war
+                        EOF
+
+                        scp -o StrictHostKeyChecking=no $WAR_FILE \
+                            $DEPLOY_SERVER:$TOMCAT_HOME/webapps/$APP_NAME.war
+
+                        ssh -o StrictHostKeyChecking=no $DEPLOY_SERVER << EOF
+                            $TOMCAT_HOME/bin/shutdown.sh || true
+                            sleep 5
+                            $TOMCAT_HOME/bin/startup.sh
+                        EOF
+
+                        echo "✅ Tomcat Deployment Completed"
                     '''
                 }
             }
-}
-
+        }
     }
 
     post {
-        always {
-            echo "Pipeline Finished!"
+        success {
+            echo "🎉 Pipeline completed successfully!"
         }
         failure {
-            echo "Pipeline Failed ❌"
-        }
-        success {
-            echo "Pipeline Success ✔"
+            echo "❌ Pipeline failed"
         }
     }
 }
