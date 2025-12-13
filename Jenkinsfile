@@ -54,7 +54,7 @@ pipeline {
 
         stage('Deploy to EC2') {
             steps {
-                sshagent(['app-server-ssh']) {
+                sshagent(['app-server']) {
                     sh '''
                         echo "Deploying artifact to EC2..."
         
